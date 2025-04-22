@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Calendar, momentLocalizer, SlotInfo, RBCEvent, View } from 'react-big-calendar';
+import { Calendar, momentLocalizer, SlotInfo, RBCEvent, View, NavigateAction } from 'react-big-calendar';
 import moment from 'moment';
 import 'react-big-calendar/lib/css/react-big-calendar.css';
 import './style.css';
@@ -29,6 +29,7 @@ export default function CalendarApp() {
   const [isSignedIn, setIsSignedIn] = useState(false);
   const [tokenClient, setTokenClient] = useState<any>(null);
   const [currentRange, setCurrentRange] = useState<{ start: Date; end: Date } | null>(null);
+  const [currentDate, setCurrentDate] = useState<Date>(new Date());
   const [currentView, setCurrentView] = useState<View>('month');
 
   const calendarRef = useRef<HTMLDivElement>(null);
@@ -62,7 +63,7 @@ export default function CalendarApp() {
       if (isTokenStillValid) {
         window.gapi.client.setToken({ access_token: savedToken });
         setIsSignedIn(true);
-        const range = getVisibleMonthRange(new Date());
+        const range = getRangeForView(currentView, currentDate);
         setCurrentRange(range);
         await listEventsInRange(range.start, range.end);
       } else if (tokenClient) {
@@ -72,7 +73,7 @@ export default function CalendarApp() {
             if (resp.error !== undefined) return;
             handleTokenSuccess(resp.access_token);
             setIsSignedIn(true);
-            const range = getVisibleMonthRange(new Date());
+            const range = getRangeForView(currentView, currentDate);
             setCurrentRange(range);
             await listEventsInRange(range.start, range.end);
           };
@@ -95,6 +96,7 @@ export default function CalendarApp() {
     };
 
     loadScripts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tokenClient]);
 
   const handleTokenSuccess = (accessToken: string) => {
@@ -119,7 +121,7 @@ export default function CalendarApp() {
       if (currentRange) {
         await listEventsInRange(currentRange.start, currentRange.end);
       } else {
-        const range = getVisibleMonthRange(new Date());
+        const range = getRangeForView(currentView, currentDate);
         setCurrentRange(range);
         await listEventsInRange(range.start, range.end);
       }
@@ -220,33 +222,54 @@ export default function CalendarApp() {
     }
   };
 
-  const handleRangeChange = (range: Date[] | { start: Date; end: Date }, view?: View) => {
-    let start: Date, end: Date;
-
-    if (Array.isArray(range)) {
-      start = range[0];
-      end = range[range.length - 1];
-    } else {
-      start = range.start;
-      end = range.end;
-    }
-
-    setCurrentRange({ start, end });
-
-    if (isSignedIn) {
-      listEventsInRange(start, end);
+  // Utility: get start/end range based on view and date
+  const getRangeForView = (view: View, date: Date): { start: Date; end: Date } => {
+    switch (view) {
+      case 'month':
+        return {
+          start: moment(date).startOf('month').startOf('week').toDate(),
+          end: moment(date).endOf('month').endOf('week').toDate(),
+        };
+      case 'week':
+        return {
+          start: moment(date).startOf('week').toDate(),
+          end: moment(date).endOf('week').toDate(),
+        };
+      case 'day':
+        return {
+          start: moment(date).startOf('day').toDate(),
+          end: moment(date).endOf('day').toDate(),
+        };
+      case 'agenda':
+        // For agenda, let's just show a 30-day range from the current date as example
+        return {
+          start: moment(date).startOf('day').toDate(),
+          end: moment(date).add(30, 'days').endOf('day').toDate(),
+        };
+      default:
+        // fallback to month range
+        return {
+          start: moment(date).startOf('month').startOf('week').toDate(),
+          end: moment(date).endOf('month').endOf('week').toDate(),
+        };
     }
   };
 
+  // Called on view change (month/week/day/agenda)
   const handleViewChange = (view: View) => {
     setCurrentView(view);
-    // No fetching here to avoid duplicate calls
+    // When view changes, fetch new range of events for currentDate
+    const range = getRangeForView(view, currentDate);
+    setCurrentRange(range);
+    if (isSignedIn) listEventsInRange(range.start, range.end);
   };
 
-  const getVisibleMonthRange = (date: Date): { start: Date; end: Date } => {
-    const start = moment(date).startOf('month').startOf('week').toDate();
-    const end = moment(date).endOf('month').endOf('week').toDate();
-    return { start, end };
+  // Called when user navigates with next/previous/today buttons
+  const handleNavigate = (date: Date, action: NavigateAction) => {
+    setCurrentDate(date);
+    const range = getRangeForView(currentView, date);
+    setCurrentRange(range);
+    if (isSignedIn) listEventsInRange(range.start, range.end);
   };
 
   return (
@@ -261,10 +284,11 @@ export default function CalendarApp() {
         startAccessor="start"
         endAccessor="end"
         selectable
-        onSelectSlot={handleSelectSlot}
-        onRangeChange={handleRangeChange}
-        onView={handleViewChange}
+        date={currentDate}
         view={currentView}
+        onNavigate={handleNavigate}
+        onView={handleViewChange}
+        onSelectSlot={handleSelectSlot}
         style={{ height: '90vh', marginTop: '20px' }}
       />
     </div>
