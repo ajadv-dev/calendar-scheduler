@@ -1,10 +1,11 @@
 import './App.css'
-import CalendarApp from './components/CalendarApp'
+import { GoogleAuthProvider } from './context/GoogleAuthProvider';
+import CalendarApp from './components/calendar/CalendarApp';
 
-function App() {
+export default function App() {
   return (
-    <CalendarApp />
-  )
+    <GoogleAuthProvider>
+      <CalendarApp />
+    </GoogleAuthProvider>
+  );
 }
-
-export default App
