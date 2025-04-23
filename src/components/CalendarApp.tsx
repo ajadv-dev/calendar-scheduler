@@ -1,16 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
-import { Calendar, momentLocalizer, SlotInfo, RBCEvent, View } from 'react-big-calendar';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Calendar, momentLocalizer, SlotInfo, RBCEvent, View, NavigateAction } from 'react-big-calendar';
 import moment from 'moment';
+import { debounce } from 'lodash';
 import 'react-big-calendar/lib/css/react-big-calendar.css';
 import './style.css';
+import { API_KEY, CLIENT_ID, DISCOVERY_DOC, SCOPES } from './consts';
 
 const localizer = momentLocalizer(moment);
-
-const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID as string;
-const API_KEY = import.meta.env.VITE_GOOGLE_API_KEY as string;
-const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest';
-const SCOPES = 'https://www.googleapis.com/auth/calendar';
-
 interface CalendarEvent extends RBCEvent {
   start: Date;
   end: Date;
@@ -19,17 +15,51 @@ interface CalendarEvent extends RBCEvent {
 
 declare global {
   interface Window {
-    gapi: any;
-    google: any;
+    gapi: unknown;
+    google: unknown;
   }
 }
+
+// Utility: get start/end range based on view and date
+  const getRangeForView = (view: View, date: Date): { start: Date; end: Date } => {
+    switch (view) {
+      case 'month':
+        return {
+          start: moment(date).startOf('month').startOf('week').toDate(),
+          end: moment(date).endOf('month').endOf('week').toDate(),
+        };
+      case 'week':
+        return {
+          start: moment(date).startOf('week').toDate(),
+          end: moment(date).endOf('week').toDate(),
+        };
+      case 'day':
+        return {
+          start: moment(date).startOf('day').toDate(),
+          end: moment(date).endOf('day').toDate(),
+        };
+      case 'agenda':
+        // For agenda, let's just show a 30-day range from the current date as example
+        return {
+          start: moment(date).startOf('day').toDate(),
+          end: moment(date).add(30, 'days').endOf('day').toDate(),
+        };
+      default:
+        // fallback to month range
+        return {
+          start: moment(date).startOf('month').startOf('week').toDate(),
+          end: moment(date).endOf('month').endOf('week').toDate(),
+        };
+    }
+  };
 
 export default function CalendarApp() {
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [isSignedIn, setIsSignedIn] = useState(false);
-  const [tokenClient, setTokenClient] = useState<any>(null);
+  const [tokenClient, setTokenClient] = useState<unknown>(null);
   const [currentRange, setCurrentRange] = useState<{ start: Date; end: Date } | null>(null);
   const [currentView, setCurrentView] = useState<View>('month');
+  const [currentDate, setCurrentDate] = useState<Date>(new Date());
 
   const calendarRef = useRef<HTMLDivElement>(null);
 
@@ -62,7 +92,8 @@ export default function CalendarApp() {
       if (isTokenStillValid) {
         window.gapi.client.setToken({ access_token: savedToken });
         setIsSignedIn(true);
-        const range = getVisibleMonthRange(new Date());
+        // const range = getVisibleMonthRange(new Date());
+        const range = getRangeForView(currentView, currentDate);
         setCurrentRange(range);
         await listEventsInRange(range.start, range.end);
       } else if (tokenClient) {
@@ -72,7 +103,8 @@ export default function CalendarApp() {
             if (resp.error !== undefined) return;
             handleTokenSuccess(resp.access_token);
             setIsSignedIn(true);
-            const range = getVisibleMonthRange(new Date());
+            // const range = getVisibleMonthRange(new Date());
+            const range = getRangeForView(currentView, currentDate);
             setCurrentRange(range);
             await listEventsInRange(range.start, range.end);
           };
@@ -119,7 +151,8 @@ export default function CalendarApp() {
       if (currentRange) {
         await listEventsInRange(currentRange.start, currentRange.end);
       } else {
-        const range = getVisibleMonthRange(new Date());
+        // const range = getVisibleMonthRange(new Date());
+        const range = getRangeForView(currentView, currentDate);
         setCurrentRange(range);
         await listEventsInRange(range.start, range.end);
       }
@@ -146,31 +179,33 @@ export default function CalendarApp() {
     }
   };
 
-  const listEventsInRange = async (start: Date, end: Date) => {
-    try {
-      const response = await window.gapi.client.calendar.events.list({
-        calendarId: 'primary',
-        timeMin: start.toISOString(),
-        timeMax: end.toISOString(),
-        showDeleted: false,
-        singleEvents: true,
-        orderBy: 'startTime',
-      });
 
-      const items = response.result.items || [];
-      const mappedEvents: CalendarEvent[] = items.map((item: any) => ({
-        title:
-          item.summary +
-          (item.conferenceData?.entryPoints?.[0]?.uri ? ` (${item.conferenceData.entryPoints[0].uri})` : ''),
-        start: new Date(item.start.dateTime || item.start.date),
-        end: new Date(item.end.dateTime || item.end.date),
-      }));
+const listEventsInRange = useCallback(async (start: Date, end: Date) => {
+  try {
+    const response = await window.gapi.client.calendar.events.list({
+      calendarId: 'primary',
+      timeMin: start.toISOString(),
+      timeMax: end.toISOString(),
+      showDeleted: false,
+      singleEvents: true,
+      orderBy: 'startTime',
+    });
 
-      setEvents(mappedEvents);
-    } catch (error) {
-      console.error('Error fetching events:', error);
-    }
-  };
+    const items = response.result.items || [];
+    const mappedEvents: CalendarEvent[] = items.map((item: any) => ({
+      title:
+        item.summary +
+        (item.conferenceData?.entryPoints?.[0]?.uri ? ` (${item.conferenceData.entryPoints[0].uri})` : ''),
+      start: new Date(item.start.dateTime || item.start.date),
+      end: new Date(item.end.dateTime || item.end.date),
+    }));
+
+    setEvents(mappedEvents);
+  } catch (error) {
+    console.error('Error fetching events:', error);
+  }
+}, []);
+
 
   const handleSelectSlot = async ({ start, end }: SlotInfo) => {
     if (!isSignedIn) {
@@ -220,34 +255,40 @@ export default function CalendarApp() {
     }
   };
 
-  const handleRangeChange = (range: Date[] | { start: Date; end: Date }, view?: View) => {
-    let start: Date, end: Date;
+  
+  const fetchEventsDebounced = useMemo(() => {
+    return debounce((start: Date, end: Date) => {
+      if (isSignedIn) {
+        listEventsInRange(start, end);
+      }
+    }, 300);
+  }, [isSignedIn, listEventsInRange]);
 
-    if (Array.isArray(range)) {
-      start = range[0];
-      end = range[range.length - 1];
-    } else {
-      start = range.start;
-      end = range.end;
-    }
-
-    setCurrentRange({ start, end });
-
-    if (isSignedIn) {
-      listEventsInRange(start, end);
-    }
+// Cleanup on unmount
+useEffect(() => {
+  return () => {
+    fetchEventsDebounced.cancel();
   };
+}, [fetchEventsDebounced]);
 
-  const handleViewChange = (view: View) => {
-    setCurrentView(view);
-    // No fetching here to avoid duplicate calls
-  };
 
-  const getVisibleMonthRange = (date: Date): { start: Date; end: Date } => {
-    const start = moment(date).startOf('month').startOf('week').toDate();
-    const end = moment(date).endOf('month').endOf('week').toDate();
-    return { start, end };
-  };
+    const handleViewChange = (view: View) => {
+      setCurrentView(view);
+      // When view changes, fetch new range of events for currentDate
+      const range = getRangeForView(view, currentDate);
+      setCurrentRange(range);
+      if (isSignedIn) fetchEventsDebounced(range.start, range.end);
+    };
+  
+    // Called when user navigates with next/previous/today buttons
+    const handleNavigate = (newDate: Date, view: View, action: NavigateAction) => {
+      setCurrentDate(newDate);
+      setCurrentView(view);
+      const range = getRangeForView(view, newDate);
+      setCurrentRange(range);
+      if (isSignedIn) fetchEventsDebounced(range.start, range.end);
+    };
+    
 
   return (
     <div className="calendar-container" ref={calendarRef}>
@@ -261,10 +302,11 @@ export default function CalendarApp() {
         startAccessor="start"
         endAccessor="end"
         selectable
-        onSelectSlot={handleSelectSlot}
-        onRangeChange={handleRangeChange}
-        onView={handleViewChange}
+        date={currentDate}
         view={currentView}
+        onNavigate={handleNavigate}
+        onView={handleViewChange}
+        onSelectSlot={handleSelectSlot}
         style={{ height: '90vh', marginTop: '20px' }}
       />
     </div>
